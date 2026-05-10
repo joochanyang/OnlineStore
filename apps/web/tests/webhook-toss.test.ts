@@ -5,10 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const SECRET = "test-webhook-secret-not-real-0000000000000000";
 const recordWebhookEvent = vi.hoisted(() => vi.fn());
 const markWebhookProcessed = vi.hoisted(() => vi.fn());
+const finalizePaidOrder = vi.hoisted(() => vi.fn());
 
 vi.mock("@commerce/db", () => ({
   recordWebhookEvent,
   markWebhookProcessed,
+  finalizePaidOrder,
 }));
 
 import { POST } from "../app/api/v1/webhooks/payments/toss/route";
@@ -40,6 +42,7 @@ describe("POST /api/v1/webhooks/payments/toss", () => {
     __resetSeenNoncesForTests();
     recordWebhookEvent.mockReset();
     markWebhookProcessed.mockReset();
+    finalizePaidOrder.mockReset();
   });
 
   afterEach(() => {
@@ -89,6 +92,69 @@ describe("POST /api/v1/webhooks/payments/toss", () => {
     const json = await res.json();
     expect(json.data.status).toBe("duplicate");
     expect(markWebhookProcessed).not.toHaveBeenCalled();
+  });
+
+  it("finalizes the paid order on a status=DONE event with paymentKey", async () => {
+    recordWebhookEvent.mockResolvedValueOnce({
+      inserted: true,
+      event: { id: "row_paid" },
+    });
+    finalizePaidOrder.mockResolvedValueOnce({ orderId: "o1", alreadyPaid: false });
+    markWebhookProcessed.mockResolvedValueOnce(undefined);
+
+    const body = JSON.stringify({
+      eventId: "evt_paid",
+      status: "DONE",
+      paymentKey: "ext_payment_1",
+    });
+    const ts = String(Date.now());
+    const res = await POST(
+      new Request("https://shop.example.com/api/v1/webhooks/payments/toss", {
+        method: "POST",
+        headers: {
+          "x-tosspayments-signature": sign(ts, body),
+          "x-tosspayments-timestamp": ts,
+          "content-type": "application/json",
+        },
+        body,
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.data.status).toBe("accepted");
+    expect(json.data.orderId).toBe("o1");
+    expect(json.data.alreadyPaid).toBe(false);
+    expect(finalizePaidOrder).toHaveBeenCalledWith({ paymentExternalId: "ext_payment_1" });
+  });
+
+  it("returns 500 when finalize throws but still records webhook", async () => {
+    recordWebhookEvent.mockResolvedValueOnce({
+      inserted: true,
+      event: { id: "row_err" },
+    });
+    finalizePaidOrder.mockRejectedValueOnce(new Error("stock missing"));
+    markWebhookProcessed.mockResolvedValueOnce(undefined);
+
+    const body = JSON.stringify({
+      eventId: "evt_err",
+      status: "DONE",
+      paymentKey: "ext_payment_err",
+    });
+    const ts = String(Date.now());
+    const res = await POST(
+      new Request("https://shop.example.com/api/v1/webhooks/payments/toss", {
+        method: "POST",
+        headers: {
+          "x-tosspayments-signature": sign(ts, body),
+          "x-tosspayments-timestamp": ts,
+          "content-type": "application/json",
+        },
+        body,
+      }),
+    );
+    expect(res.status).toBe(500);
+    expect(markWebhookProcessed).toHaveBeenCalledWith("row_err", "stock missing");
   });
 
   it("rejects when body lacks eventId with 401", async () => {

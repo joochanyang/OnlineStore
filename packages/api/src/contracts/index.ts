@@ -143,3 +143,92 @@ export type CheckoutOrderCreated = {
   total: Money;
   expiresAt: string;
 };
+
+export type OrderStatusValue =
+  | "DRAFT"
+  | "PENDING_PAYMENT"
+  | "PAID"
+  | "FULFILLING"
+  | "SHIPPED"
+  | "DELIVERED"
+  | "RETURN_REQUESTED"
+  | "RETURNED"
+  | "REFUNDED"
+  | "CANCELLED";
+
+export type OrderListItemDto = {
+  id: string;
+  status: OrderStatusValue;
+  totalPrice: Money;
+  subtotalPrice: Money;
+  itemCount: number;
+  createdAt: string;
+  paidAt: string | null;
+};
+
+export type OrderListResponse = {
+  items: OrderListItemDto[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
+export type OrderDetailLineDto = {
+  id: string;
+  sku: string;
+  productName: string;
+  productSlug: string;
+  color: string;
+  size: string;
+  quantity: number;
+  unitPrice: Money;
+  lineTotal: Money;
+  fulfilledQuantity: number;
+  refundedQuantity: number;
+};
+
+export type OrderDetailRefundDto = {
+  id: string;
+  amount: Money;
+  reason: string;
+  status: "PENDING" | "COMPLETED" | "FAILED" | "CANCELLED";
+  requestedAt: string;
+  completedAt: string | null;
+};
+
+export type OrderDetailShipmentDto = {
+  id: string;
+  carrier: string;
+  trackingNumber: string | null;
+  shippedAt: string | null;
+  deliveredAt: string | null;
+};
+
+export type OrderDetailDto = {
+  id: string;
+  customerId: string;
+  status: OrderStatusValue;
+  subtotalPrice: Money;
+  shippingFee: Money;
+  discountPrice: Money;
+  totalPrice: Money;
+  createdAt: string;
+  paidAt: string | null;
+  lines: OrderDetailLineDto[];
+  shipments: OrderDetailShipmentDto[];
+  refunds: OrderDetailRefundDto[];
+};
+
+export type FulfillmentRequest = {
+  lines: Array<{ orderLineId: string; quantity: number }>;
+  shipment?: {
+    carrier: string;
+    trackingNumber?: string;
+  };
+};
+
+export type RefundRequest = {
+  lines: Array<{ orderLineId: string; quantity: number }>;
+  reason: string;
+  idempotencyKey: string;
+};

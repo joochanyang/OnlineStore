@@ -514,6 +514,12 @@ export async function createOrderFromReservation(input: {
       include: { lines: true },
     });
 
+    // Re-tag the reservation group so the webhook can release them by order id.
+    await tx.inventoryReservation.updateMany({
+      where: { reason: `checkout:${input.groupId}` },
+      data: { reason: `order:${order.id}` },
+    });
+
     return {
       id: order.id,
       customerId: order.customerId,

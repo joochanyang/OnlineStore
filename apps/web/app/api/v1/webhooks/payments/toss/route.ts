@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 
 import { TossPaymentsProvider } from "@commerce/payments";
-import { markWebhookProcessed, recordWebhookEvent } from "@commerce/db";
+import {
+  finalizePaidOrder,
+  markWebhookProcessed,
+  recordWebhookEvent,
+} from "@commerce/db";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,6 +44,25 @@ function reasonStatus(reason: RejectionReason): number {
     default:
       return 401;
   }
+}
+
+function isPaidEvent(payload: Record<string, unknown>): { ok: true; paymentKey: string } | null {
+  const status =
+    typeof payload.status === "string" ? payload.status : undefined;
+  const eventType =
+    typeof payload.eventType === "string" ? payload.eventType : undefined;
+  const paymentKey =
+    typeof payload.paymentKey === "string"
+      ? payload.paymentKey
+      : typeof payload.externalId === "string"
+        ? payload.externalId
+        : undefined;
+  if (!paymentKey) return null;
+  const paid =
+    status === "DONE" ||
+    eventType === "PAYMENT.DONE" ||
+    eventType === "PAYMENT_STATUS_CHANGED" && status === "DONE";
+  return paid ? { ok: true, paymentKey } : null;
 }
 
 export async function POST(request: Request) {
@@ -93,12 +116,43 @@ export async function POST(request: Request) {
     );
   }
 
+  // First-time delivery — perform side-effects.
+  let processingError: string | undefined;
+  let finalizedOrderId: string | undefined;
+  let alreadyPaid = false;
+
+  const paid = isPaidEvent(payload);
+  if (paid) {
+    try {
+      const result = await finalizePaidOrder({ paymentExternalId: paid.paymentKey });
+      if (result) {
+        finalizedOrderId = result.orderId;
+        alreadyPaid = result.alreadyPaid;
+      }
+    } catch (err) {
+      processingError = err instanceof Error ? err.message : "finalize_failed";
+    }
+  }
+
   if (recorded.event) {
-    await markWebhookProcessed(recorded.event.id).catch(() => undefined);
+    if (processingError) {
+      await markWebhookProcessed(recorded.event.id, processingError).catch(() => undefined);
+    } else {
+      await markWebhookProcessed(recorded.event.id).catch(() => undefined);
+    }
   }
 
   return NextResponse.json(
-    { requestId, data: { status: "accepted", eventId } },
-    { status: 200 },
+    {
+      requestId,
+      data: {
+        status: processingError ? "error" : "accepted",
+        eventId,
+        orderId: finalizedOrderId,
+        alreadyPaid: paid ? alreadyPaid : undefined,
+        error: processingError,
+      },
+    },
+    { status: processingError ? 500 : 200 },
   );
 }

@@ -49,6 +49,25 @@ export {
   type PersistedPayment,
 } from "./cart-repository";
 
+export {
+  OrderError,
+  cancelCustomerOrder,
+  createFulfillment,
+  createRefund,
+  finalizePaidOrder,
+  findAdminOrder,
+  findCustomerOrder,
+  listAdminOrders,
+  listCustomerOrders,
+  type CreateFulfillmentInput,
+  type CreateRefundInput,
+  type OrderDetail,
+  type OrderErrorCode,
+  type OrderListItem,
+  type OrderListResult,
+  type RefundProvider,
+} from "./orders-repository";
+
 import { getAuditActor } from "./audit-context";
 
 export type CatalogProduct = {

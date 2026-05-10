@@ -1,6 +1,6 @@
 # 어플웹 — Commerce Platform 진행 상태
 
-> **재개 명령어**: `/clear` 후 `어플웹 Phase 2 Slice C 이어서 작업` 입력 → 이 파일 자동 로드 → 부분 출고/환불 + 주문 history 진입.
+> **재개 명령어**: `/clear` 후 `어플웹 Phase 3 이어서 작업` 입력 → 이 파일 자동 로드 → Phase 3(배송·CS) 또는 Slice C 잔여 통합 테스트 진입.
 > **GitHub 원격**: https://github.com/joochanyang/OnlineStore.git (main 브랜치)
 
 ---
@@ -209,6 +209,65 @@
 
 ---
 
+## 1.11 Phase 2 Slice C 완료 (2026-05-11)
+
+### 1.11.1 신규 DB 모듈 `packages/db/src/orders-repository.ts`
+
+10개 export 함수/타입:
+
+- `listCustomerOrders({ customerId, status?, page, pageSize })` — 페이지네이션 + 본인 주문만, lines.quantity로 itemCount 계산
+- `findCustomerOrder({ customerId, orderId })` — 소유권 검증 (FORBIDDEN), lines + payments + refunds + shipments + fulfillments include
+- `findAdminOrder(orderId)` / `listAdminOrders(filter)` — 관리자용
+- `cancelCustomerOrder({ customerId, orderId })` — 트랜잭션. SHIPPED/DELIVERED/CANCELLED 거부, PAID면 stock increment, PENDING이면 reservation 해제
+- `finalizePaidOrder({ paymentExternalId })` — webhook용. 이미 PAID/CANCELLED/REFUNDED면 no-op (`alreadyPaid:true`), 아니면 `productVariant.updateMany({ where: { stock: { gte } } })` 원자적 차감 + reservation 삭제 + Order PAID + paidAt + Payment.approvedAt
+- `createFulfillment({ orderId, lines, shipment? })` — 라인별 누적 quantity 검증 (FULFILLMENT_OVERDRAW), Shipment 옵션 생성, 모든 라인 채워지면 SHIPPED, 일부면 FULFILLING
+- `createRefund({ orderId, lines, reason, idempotencyKey, provider })` — provider는 `{ refund(...) → { externalRefundId, … } }` 추상 인터페이스, 누적 환불액 ≤ Payment.amount 검증, idempotencyKey 기반 dedup, PaymentRefund + OrderLineRefund 생성, stock 복원, 모든 라인 환불되면 REFUNDED
+- `OrderError` + 8 enum codes (NO_DATABASE / ORDER_NOT_FOUND / FORBIDDEN / INVALID_STATE / INVALID_QUANTITY / REFUND_OVERDRAW / FULFILLMENT_OVERDRAW / PAYMENT_NOT_APPROVED)
+
+`createOrderFromReservation`도 갱신: order 생성 직후 reservation의 reason을 `checkout:${cartId}`에서 `order:${orderId}`로 rename → webhook이 release하기 쉬워짐
+
+### 1.11.2 Webhook 후처리 강화
+
+`apps/web/app/api/v1/webhooks/payments/toss/route.ts`:
+
+- `isPaidEvent(payload)` — `status === 'DONE'` 또는 `eventType === 'PAYMENT.DONE'` + paymentKey 있을 때만 결제 완료로 간주
+- 신규 webhook insert일 때만 `finalizePaidOrder` 호출 (재전송에선 no-op)
+- finalize 실패 시 500 응답 + `markWebhookProcessed(id, errorMessage)` 기록 → Toss가 재시도하게 유도
+- 응답 envelope: `{ status: 'accepted'|'duplicate'|'error', orderId?, alreadyPaid?, error? }`
+
+### 1.11.3 고객 주문 라우트 (`apps/web/app/api/v1/me/orders/`)
+
+- `GET /me/orders` — 페이지네이션(page, pageSize ≤ 50, 기본 20) + status 필터
+- `GET /me/orders/[id]` — 본인 주문 상세 (lines + fulfilledQty + refundedQty + shipments + refunds projection)
+- `POST /me/orders/[id]/cancel` — CSRF 필수, 미발송 한정, `withAuditContext` + `insertAuditLog('order.cancelled')`
+
+### 1.11.4 관리자 주문 라우트 (`apps/admin/app/api/v1/orders/`)
+
+- `GET /api/v1/orders` — `order:read` 권한
+- `GET /api/v1/orders/[id]` — 상세
+- `POST /api/v1/orders/[id]/fulfillments` — `order:write` + CSRF, `{ lines: [{orderLineId, quantity}], shipment? }`
+- `POST /api/v1/orders/[id]/refunds` — `order:write` + CSRF + `idempotencyKey ≥ 16자` + reason. 내부에서 TossPaymentsProvider 인스턴스화 → `createRefund`에 provider 주입 (`PAYMENT_MODE` env 기반)
+- `apps/admin/package.json`에 `@commerce/payments` dep 추가
+
+모든 mutating 라우트는 `withAuditContext` + `insertAuditLog('order.fulfilled' | 'order.refunded')` 자동 기록 (after 필드에 변경 라인/shipment/status 보존)
+
+### 1.11.5 검증 (2026-05-11)
+
+| 항목 | 결과 |
+|---|---|
+| Lint | ✅ 14/14 |
+| Typecheck | ✅ 14/14 |
+| Test | ✅ **138 passing** (Slice B 119 + Slice C: orders-repository 10, order-routes 3, admin-orders 4, webhook 추가 2 = +19) |
+| Build | ✅ 14/14, 신규 라우트 7개 (web 3 + admin 4) 등록 |
+
+### 1.11.6 Slice C 잔여
+
+1. 사용자 액션: `.env` + `npm run prisma:migrate` 후 통합 테스트 (실제 Postgres + Toss sandbox)
+2. 통합 시나리오: PENDING_PAYMENT 주문 → Toss 결제 → webhook 수신 → Order PAID + stock 차감 / 부분 환불 후 잔액 합산 = 원결제액 / 동일 idempotencyKey 환불 5번 → PaymentRefund 1건만
+3. PaymentMethod 다양화 (가상계좌/카카오페이/네이버페이) — Toss 어댑터는 이미 지원, 라우트에서 method 전달만 활성화 필요
+
+---
+
 ## 2. Phase 2 작업계획 (다음 슬라이스)
 
 ### 2.1 목표
@@ -376,23 +435,21 @@ apps/
 
 ---
 
-## 6. Phase 2 Slice C 시작 지점 (다음 세션)
+## 6. 다음 진입 지점 (Phase 3)
 
-**Slice A·B는 2026-05-11 완료**. Slice C에서 즉시 다음 단계:
+**Phase 2 (Slice A·B·C) 2026-05-11 완료**. Phase 3는 배송·CS:
 
-1. **사용자 액션 선행 확인**: `.env` + `npm run prisma:migrate` (Toss webhook 서명 검증을 실제로 동작시키려면 필수)
-2. **고객 주문 history 라우트** (`apps/web/app/api/v1/me/orders/`)
-   - `GET /me/orders` — 페이지네이션 + 상태 필터
-   - `GET /me/orders/[id]` — 상세 (lines + payments + shipments + refunds)
-   - `POST /me/orders/[id]/cancel` — 미발송 한정. PaymentProvider.cancel + reservation 해제 (이미 차감된 stock은 `tx.productVariant.update increment`로 복원)
-3. **관리자 fulfillment/refund 라우트** (`apps/admin/app/api/v1/orders/[id]/`)
-   - `POST /api/v1/orders/[id]/fulfillments` — 라인별 quantity 부분 출고 등록 → `OrderLineFulfillment` + Shipment 생성/연결
-   - `POST /api/v1/orders/[id]/refunds` — 라인별 quantity 부분 환불 → Toss `cancel(cancelAmount)` → `PaymentRefund` + `OrderLineRefund` 생성. 누적 환불액 ≤ Payment.amount 보장
-4. **Webhook 후처리 강화** — Toss webhook이 결제 완료 이벤트 받으면 reservation → stock 차감 + Order.status PAID + paidAt 기록 (현재는 단순 markWebhookProcessed만 처리)
-5. **감사 로그**: 주문 상태 변경 (cancel/fulfill/refund) 모두 `withAuditContext` + `insertAuditLog` 자동 기록
-6. **테스트**: 환불 합계 = Payment.amount, 같은 fulfillment 두 번 → 멱등성 (단순 dedup 또는 conflict)
+1. **택배사 연동** — CJ대한통운/한진/우체국/롯데/로젠 5종 트래킹 API 어댑터 (`packages/integrations/`)
+2. **Shipment 자동 추적** — Inngest 잡 (또는 cron)으로 주기적 status 폴링 → Order.status DELIVERED 자동 전이
+3. **RMA (반품·교환)** — `ReturnRequest` 모델 신규, 고객 요청 → 관리자 승인 → 회수 → 검수 → 환불/교환
+4. **CS 1:1 문의** — `SupportTicket` + 메시지 스레드, 고객/상담사 양방향
+5. **Phase 2 Slice C 잔여 통합 테스트**도 병행 (실제 Toss sandbox + 동시성)
 
-**예상 공수**: Slice C ≒ 5–7일.
+**상세는 `docs/plan-v2-backend.md` 참조 (Phase 3 섹션)**
+
+### 6.1 Phase 2 잔여 (사용자 액션 의존)
+
+`.env` 작성 + `npm run prisma:migrate phase2_orders_cart_payments` + Toss 가맹점 콘솔 webhook URL 등록 + 실제 결제→환불 e2e 1회 통과
 
 ---
 
@@ -411,4 +468,4 @@ apps/
 
 ---
 
-**마지막 갱신**: 2026-05-11 새벽 — Phase 2 Slice B 완료 (카트 헬퍼 8개 + 카트 라우트 5종 + 체크아웃 2종 재작성 + 16 신규 테스트, 누적 119 tests / 14 builds 모두 통과). Slice C 진입은 사용자 `.env` 작성 후 또는 mock 모드로 즉시 가능.
+**마지막 갱신**: 2026-05-11 새벽 — Phase 2 Slice C 완료 (orders-repository 10 함수 + 고객 주문 라우트 3종 + 관리자 fulfillment/refund 라우트 4종 + webhook 후처리 finalizePaidOrder + 19 신규 테스트, 누적 138 tests / 14 builds 모두 통과). Phase 2 종결 — 다음은 Phase 3 (배송·CS) 또는 Phase 2 통합 테스트. 사용자 `.env` 작성 후 prisma:migrate 필요.
