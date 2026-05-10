@@ -1,7 +1,8 @@
 # 어플웹 — Commerce Platform 진행 상태
 
-> **재개 명령어**: `/clear` 후 `어플웹 Phase 3 이어서 작업` 입력 → 이 파일 자동 로드 → Phase 3(배송·CS) 또는 Slice C 잔여 통합 테스트 진입.
+> **재개 명령어 (다음 세션 즉시 사용)**: `/clear` 후 `어플웹 Phase 3 Slice 1 이어서 작업` 입력 → 이 파일 자동 로드 → 아래 §6 명세대로 즉시 코드 작업 진입.
 > **GitHub 원격**: https://github.com/joochanyang/OnlineStore.git (main 브랜치)
+> **Phase 2 종결 (2026-05-11)**: Slice A·B·C 모두 완료, 누적 138 tests / 14 builds 통과 (커밋 `76f7d01`).
 
 ---
 
@@ -435,21 +436,60 @@ apps/
 
 ---
 
-## 6. 다음 진입 지점 (Phase 3)
+## 6. Phase 3 Slice 1 시작 지점 (다음 세션 즉시 실행)
 
-**Phase 2 (Slice A·B·C) 2026-05-11 완료**. Phase 3는 배송·CS:
+**작업 요지**: 택배사 5종 트래킹 어댑터 인터페이스 + mock 구현 + 관리자 수동 추적 라우트 + 단위 테스트. 자격증명 / 외부 호출 / 신규 마이그레이션 **불필요** — mock 모드로 e2e까지 컴파일·테스트 가능.
 
-1. **택배사 연동** — CJ대한통운/한진/우체국/롯데/로젠 5종 트래킹 API 어댑터 (`packages/integrations/`)
-2. **Shipment 자동 추적** — Inngest 잡 (또는 cron)으로 주기적 status 폴링 → Order.status DELIVERED 자동 전이
-3. **RMA (반품·교환)** — `ReturnRequest` 모델 신규, 고객 요청 → 관리자 승인 → 회수 → 검수 → 환불/교환
-4. **CS 1:1 문의** — `SupportTicket` + 메시지 스레드, 고객/상담사 양방향
-5. **Phase 2 Slice C 잔여 통합 테스트**도 병행 (실제 Toss sandbox + 동시성)
+### 6.1 작업 순서 (이 순서대로 task로 만들고 진행)
 
-**상세는 `docs/plan-v2-backend.md` 참조 (Phase 3 섹션)**
+1. **신규 패키지 모듈** `packages/integrations/src/shipping/`
+   - `types.ts` — 다음을 export
+     - `type ShippingCarrier = "cj" | "hanjin" | "epost" | "lotte" | "logen"`
+     - `type ShippingStatusValue = "INFORMATION_RECEIVED" | "AT_PICKUP" | "IN_TRANSIT" | "OUT_FOR_DELIVERY" | "DELIVERED" | "EXCEPTION" | "RETURNED"`
+     - `type ShippingMode = "mock" | "live"`
+     - `type ShippingTrackingEvent = { occurredAt: Date; status: ShippingStatusValue; location?: string; description?: string }`
+     - `type ShippingTrackingResult = { carrier: ShippingCarrier; trackingNumber: string; status: ShippingStatusValue; events: ShippingTrackingEvent[]; lastUpdatedAt: Date; deliveredAt?: Date }`
+     - `interface ShippingProvider { readonly carrier; readonly mode; track(trackingNumber: string): Promise<ShippingTrackingResult> }`
+     - `class ShippingError extends Error { code: "NOT_IMPLEMENTED" | "PROVIDER_HTTP" | "TRACKING_NOT_FOUND" | "INVALID_TRACKING_NUMBER" }`
+   - `providers/mock.ts` — `MockShippingProvider` (carrier별 deterministic seed, trackingNumber 끝자리에 따라 PENDING/IN_TRANSIT/OUT_FOR_DELIVERY/DELIVERED 분기, 1초 latency 없음)
+   - `providers/cj.ts`, `hanjin.ts`, `epost.ts`, `lotte.ts`, `logen.ts` — 각각 `class XxxShippingProvider implements ShippingProvider`. `live` 모드에서는 `ShippingError("NOT_IMPLEMENTED", ...)` throw, `mock` 모드면 mock 위임 (Phase 3 Slice 2에서 실제 fetch 구현 예정)
+   - `factory.ts` — `createShippingProvider({ carrier, mode })` → 해당 provider 인스턴스
+   - `index.ts` — re-export
 
-### 6.1 Phase 2 잔여 (사용자 액션 의존)
+2. **DB 헬퍼** `packages/db/src/orders-repository.ts`에 추가
+   - `recordShipmentTracking({ shipmentId, result: ShippingTrackingResult })` — Shipment.lastTrackedAt 갱신, `result.status === "DELIVERED"`이면 deliveredAt 기록 + Order.status `"DELIVERED"`로 전이 (모든 shipment가 delivered일 때만)
+   - 스키마 추가: `Shipment.lastTrackedAt DateTime?` + `Shipment.statusDetail String?` (마이그레이션 미수행, schema.prisma만 갱신 + `prisma generate` 통과 확인)
+   - 인덱스: `@@index([orderId, lastTrackedAt])`
 
-`.env` 작성 + `npm run prisma:migrate phase2_orders_cart_payments` + Toss 가맹점 콘솔 webhook URL 등록 + 실제 결제→환불 e2e 1회 통과
+3. **관리자 라우트** `apps/admin/app/api/v1/shipments/[id]/track/route.ts`
+   - `POST` (`order:write` + CSRF) — body 무. 동작: shipment 조회 → carrier 정규화(string→ShippingCarrier) → `createShippingProvider({ carrier, mode: PAYMENT_MODE 동치 또는 SHIPPING_MODE env })` → `track(trackingNumber)` → `recordShipmentTracking` → 상세 응답
+   - 응답: `ApiEnvelope<{ shipment: ShipmentDetailDto, tracking: ShippingTrackingResult }>`
+   - audit 로그: `shipment.tracked` (insertAuditLog with after = result)
+
+4. **API 계약 확장** `packages/api/src/contracts/index.ts`
+   - `ShipmentTrackingDto` (events, status, lastUpdatedAt, deliveredAt) 추가
+   - `OrderDetailShipmentDto`에 `status` + `statusDetail` 옵션 추가 + tracking 옵션 필드
+
+5. **단위 테스트**
+   - `packages/integrations/tests/shipping-mock.test.ts` — MockShippingProvider 5 carrier × 4 상태 분기 결정성, tracking number 정규화
+   - `packages/integrations/tests/shipping-live-stub.test.ts` — 각 live provider stub이 `NOT_IMPLEMENTED` throw
+   - `packages/db/tests/shipment-tracking.test.ts` — `recordShipmentTracking` 흐름 (DELIVERED 시 Order DELIVERED 전이, 일부면 미전이) — FakeOrdersDb 확장
+   - `apps/admin/tests/admin-shipments.test.ts` — POST /api/v1/shipments/[id]/track 인증/CSRF 거부
+
+6. **검증 + 커밋 + push**
+   - lint / typecheck / test / build → 14/14 + integrations 패키지 (15/15)
+   - 커밋: `feat: phase 3 slice 1 — shipping provider adapters + manual tracking route`
+   - push: 동일 PAT (사용자가 revoke했으면 새로 받아 작성)
+
+### 6.2 Phase 3 Slice 2~4 (Slice 1 완료 후)
+
+- **Slice 2**: 실제 carrier API/HTML 어댑터 구현 (우체국 IPS Open API → Toss-style sandbox 가능, 한진 Open API, CJ 스크래퍼 등) + Inngest/cron 폴링 잡 (10분마다 IN_TRANSIT shipment 자동 업데이트)
+- **Slice 3**: RMA — `ReturnRequest` 모델, 고객 요청→관리자 승인→회수 운송장 발급→검수→환불/교환 흐름
+- **Slice 4**: CS 1:1 문의 — `SupportTicket` + 메시지 스레드 + 첨부 R2 업로드
+
+### 6.3 Phase 2 잔여 (병행 가능, 사용자 액션 의존)
+
+`.env` 작성 + `npm run prisma:migrate phase2_cart_orders_payments` + Toss 가맹점 콘솔 webhook URL 등록 + 실제 결제→환불 e2e 1회 통과. mock 모드 코드는 모두 준비됨.
 
 ---
 
@@ -468,4 +508,4 @@ apps/
 
 ---
 
-**마지막 갱신**: 2026-05-11 새벽 — Phase 2 Slice C 완료 (orders-repository 10 함수 + 고객 주문 라우트 3종 + 관리자 fulfillment/refund 라우트 4종 + webhook 후처리 finalizePaidOrder + 19 신규 테스트, 누적 138 tests / 14 builds 모두 통과). Phase 2 종결 — 다음은 Phase 3 (배송·CS) 또는 Phase 2 통합 테스트. 사용자 `.env` 작성 후 prisma:migrate 필요.
+**마지막 갱신**: 2026-05-11 새벽 — Phase 2 종결 (Slice A·B·C 완료, 138 tests / 14 builds, push 까지 완료 `76f7d01`). 다음 세션 진입 명세는 §6 (Phase 3 Slice 1: 택배사 트래킹 어댑터 + Shipment 추적 + 관리자 수동 트리거). 자격증명 / 마이그레이션 불필요 — mock 모드로 즉시 코드 작업 가능.
