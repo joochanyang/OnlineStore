@@ -57,15 +57,20 @@ export {
   finalizePaidOrder,
   findAdminOrder,
   findCustomerOrder,
+  findShipment,
   listAdminOrders,
   listCustomerOrders,
+  recordShipmentTracking,
   type CreateFulfillmentInput,
   type CreateRefundInput,
   type OrderDetail,
   type OrderErrorCode,
   type OrderListItem,
   type OrderListResult,
+  type RecordShipmentTrackingInput,
+  type RecordShipmentTrackingOutput,
   type RefundProvider,
+  type ShipmentTrackingStatus,
 } from "./orders-repository";
 
 import { getAuditActor } from "./audit-context";

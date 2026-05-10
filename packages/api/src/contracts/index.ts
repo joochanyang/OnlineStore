@@ -196,12 +196,41 @@ export type OrderDetailRefundDto = {
   completedAt: string | null;
 };
 
+export type ShipmentTrackingStatusValue =
+  | "INFORMATION_RECEIVED"
+  | "AT_PICKUP"
+  | "IN_TRANSIT"
+  | "OUT_FOR_DELIVERY"
+  | "DELIVERED"
+  | "EXCEPTION"
+  | "RETURNED";
+
+export type ShipmentTrackingEventDto = {
+  occurredAt: string;
+  status: ShipmentTrackingStatusValue;
+  location?: string;
+  description?: string;
+};
+
+export type ShipmentTrackingDto = {
+  carrier: string;
+  trackingNumber: string;
+  status: ShipmentTrackingStatusValue;
+  events: ShipmentTrackingEventDto[];
+  lastUpdatedAt: string;
+  deliveredAt: string | null;
+};
+
 export type OrderDetailShipmentDto = {
   id: string;
   carrier: string;
   trackingNumber: string | null;
   shippedAt: string | null;
   deliveredAt: string | null;
+  status?: ShipmentTrackingStatusValue;
+  statusDetail?: string | null;
+  lastTrackedAt?: string | null;
+  tracking?: ShipmentTrackingDto;
 };
 
 export type OrderDetailDto = {

@@ -5,7 +5,8 @@
   "exports": {
     "./suppliers": "./src/suppliers/index.ts",
     "./importers": "./src/importers/index.ts",
-    "./ai-normalizer": "./src/ai-normalizer/index.ts"
+    "./ai-normalizer": "./src/ai-normalizer/index.ts",
+    "./shipping": "./src/shipping/index.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

@@ -8,7 +8,8 @@ export type OrderErrorCode =
   | "INVALID_QUANTITY"
   | "REFUND_OVERDRAW"
   | "FULFILLMENT_OVERDRAW"
-  | "PAYMENT_NOT_APPROVED";
+  | "PAYMENT_NOT_APPROVED"
+  | "SHIPMENT_NOT_FOUND";
 
 export class OrderError extends Error {
   constructor(
@@ -500,4 +501,100 @@ export async function createRefund(
     if (!reloaded) throw new OrderError("ORDER_NOT_FOUND", "order vanished after refund");
     return reloaded;
   });
+}
+
+export type ShipmentTrackingStatus =
+  | "INFORMATION_RECEIVED"
+  | "AT_PICKUP"
+  | "IN_TRANSIT"
+  | "OUT_FOR_DELIVERY"
+  | "DELIVERED"
+  | "EXCEPTION"
+  | "RETURNED";
+
+export type RecordShipmentTrackingInput = {
+  shipmentId: string;
+  result: {
+    status: ShipmentTrackingStatus;
+    statusDetail?: string;
+    lastUpdatedAt: Date;
+    deliveredAt?: Date;
+  };
+};
+
+export type RecordShipmentTrackingOutput = {
+  shipmentId: string;
+  orderId: string;
+  shipmentDelivered: boolean;
+  orderTransitionedToDelivered: boolean;
+};
+
+export async function recordShipmentTracking(
+  input: RecordShipmentTrackingInput,
+): Promise<RecordShipmentTrackingOutput> {
+  const prisma = requirePrisma();
+  return prisma.$transaction(async (tx) => {
+    const shipment = await tx.shipment.findUnique({ where: { id: input.shipmentId } });
+    if (!shipment) {
+      throw new OrderError("SHIPMENT_NOT_FOUND", `shipment ${input.shipmentId} not found`);
+    }
+
+    const isDelivered = input.result.status === "DELIVERED";
+    const deliveredAt = isDelivered
+      ? input.result.deliveredAt ?? input.result.lastUpdatedAt
+      : null;
+
+    await tx.shipment.update({
+      where: { id: shipment.id },
+      data: {
+        lastTrackedAt: input.result.lastUpdatedAt,
+        statusDetail: input.result.statusDetail ?? input.result.status,
+        ...(deliveredAt ? { deliveredAt } : {}),
+      },
+    });
+
+    let orderTransitioned = false;
+    if (isDelivered) {
+      const allShipments = await tx.shipment.findMany({ where: { orderId: shipment.orderId } });
+      // Treat the just-updated shipment as delivered even if reload race appears.
+      const allDelivered = allShipments.every(
+        (s) => s.id === shipment.id || s.deliveredAt !== null,
+      );
+      if (allDelivered) {
+        const order = await tx.order.findUnique({ where: { id: shipment.orderId } });
+        if (order && order.status !== "DELIVERED") {
+          await tx.order.update({
+            where: { id: order.id },
+            data: { status: "DELIVERED" },
+          });
+          orderTransitioned = true;
+        }
+      }
+    }
+
+    return {
+      shipmentId: shipment.id,
+      orderId: shipment.orderId,
+      shipmentDelivered: isDelivered,
+      orderTransitionedToDelivered: orderTransitioned,
+    };
+  });
+}
+
+export async function findShipment(shipmentId: string): Promise<{
+  id: string;
+  orderId: string;
+  carrier: string;
+  trackingNumber: string | null;
+  shippedAt: Date | null;
+  deliveredAt: Date | null;
+  lastTrackedAt: Date | null;
+  statusDetail: string | null;
+}> {
+  const prisma = requirePrisma();
+  const shipment = await prisma.shipment.findUnique({ where: { id: shipmentId } });
+  if (!shipment) {
+    throw new OrderError("SHIPMENT_NOT_FOUND", `shipment ${shipmentId} not found`);
+  }
+  return shipment;
 }

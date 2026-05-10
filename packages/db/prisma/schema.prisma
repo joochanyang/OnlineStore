@@ -259,10 +259,13 @@ model Shipment {
   trackingNumber String?
   shippedAt      DateTime?
   deliveredAt    DateTime?
+  lastTrackedAt  DateTime?
+  statusDetail   String?
   order          Order                  @relation(fields: [orderId], references: [id], onDelete: Cascade)
   fulfillments   OrderLineFulfillment[]
 
   @@index([orderId])
+  @@index([orderId, lastTrackedAt])
 }
 
 model AdminUser {

@@ -1,8 +1,9 @@
 # 어플웹 — Commerce Platform 진행 상태
 
-> **재개 명령어 (다음 세션 즉시 사용)**: `/clear` 후 `어플웹 Phase 3 Slice 1 이어서 작업` 입력 → 이 파일 자동 로드 → 아래 §6 명세대로 즉시 코드 작업 진입.
+> **재개 명령어 (다음 세션 즉시 사용)**: `/clear` 후 `어플웹 Phase 3 Slice 2 이어서 작업` 입력 → 이 파일 자동 로드 → 아래 §6 명세대로 다음 슬라이스 진입.
 > **GitHub 원격**: https://github.com/joochanyang/OnlineStore.git (main 브랜치)
 > **Phase 2 종결 (2026-05-11)**: Slice A·B·C 모두 완료, 누적 138 tests / 14 builds 통과 (커밋 `76f7d01`).
+> **Phase 3 Slice 1 종결 (2026-05-11)**: 택배사 5종 mock 어댑터 + Shipment 추적 helper + 관리자 수동 트리거 라우트 + 19 new tests. 총 157 tests / 14 builds 통과.
 
 ---
 
@@ -436,11 +437,78 @@ apps/
 
 ---
 
-## 6. Phase 3 Slice 1 시작 지점 (다음 세션 즉시 실행)
+## 5.x Phase 3 Slice 1 완료 (2026-05-11)
 
-**작업 요지**: 택배사 5종 트래킹 어댑터 인터페이스 + mock 구현 + 관리자 수동 추적 라우트 + 단위 테스트. 자격증명 / 외부 호출 / 신규 마이그레이션 **불필요** — mock 모드로 e2e까지 컴파일·테스트 가능.
+### 5.x.1 신규 모듈 `@commerce/integrations/shipping`
 
-### 6.1 작업 순서 (이 순서대로 task로 만들고 진행)
+`packages/integrations/src/shipping/`:
+
+- `types.ts` — `ShippingCarrier` (cj/hanjin/epost/lotte/logen), `ShippingMode` (mock/live), `ShippingStatusValue` 7개, `ShippingTrackingEvent`, `ShippingTrackingResult`, `ShippingProvider` 인터페이스, `ShippingError(NOT_IMPLEMENTED|PROVIDER_HTTP|TRACKING_NOT_FOUND|INVALID_TRACKING_NUMBER)`. `normalizeTrackingNumber` (공백/하이픈 제거 + uppercase + 영숫자 검증) + `normalizeCarrier` (한글 별칭 cj대한통운/한진/우체국/롯데택배/로젠 등 지원).
+- `providers/mock.ts` — `MockShippingProvider`. trackingNumber 마지막 자리 결정성 (0-1=INFO_RECEIVED, 2=AT_PICKUP, 3-4=IN_TRANSIT, 5-6=OUT_FOR_DELIVERY, 7-9=DELIVERED), 알파벳 폴백, hash seed 기반 base time. 진행 단계별 events 자동 생성.
+- `providers/{cj,hanjin,epost,lotte,logen}.ts` — 각 carrier별 provider class. `mode='mock'` 시 MockShippingProvider 위임, `mode='live'` 시 `ShippingError("NOT_IMPLEMENTED", …)` throw (Phase 3 Slice 2에서 실제 구현 예정).
+- `factory.ts` — `createShippingProvider({ carrier, mode })` exhaustive switch.
+- `index.ts` — re-export. package.json `./shipping` export 추가.
+
+### 5.x.2 Shipment 스키마 확장 + 추적 helper
+
+`packages/db/prisma/schema.prisma`:
+
+- `Shipment.lastTrackedAt DateTime?`, `Shipment.statusDetail String?`
+- `@@index([orderId, lastTrackedAt])` 추가
+- `prisma generate` 통과 (마이그레이션 미수행 — 필요 시 `phase3_shipment_tracking` 이름으로 사용자가 실행)
+
+`packages/db/src/orders-repository.ts`:
+
+- `recordShipmentTracking({ shipmentId, result })` — Shipment.lastTrackedAt + statusDetail 갱신, status === 'DELIVERED' 시 deliveredAt 기록 + Order의 모든 shipment가 delivered면 Order.status를 DELIVERED로 전이 (이미 DELIVERED면 transition flag false). 트랜잭션 보장.
+- `findShipment(id)` — 단순 조회 + SHIPMENT_NOT_FOUND 처리
+- `OrderError`에 `SHIPMENT_NOT_FOUND` 코드 추가
+- exports: `@commerce/db`에서 `recordShipmentTracking`, `findShipment`, `RecordShipmentTrackingInput/Output`, `ShipmentTrackingStatus` 노출
+
+### 5.x.3 관리자 수동 추적 라우트
+
+`apps/admin/app/api/v1/shipments/[id]/track/route.ts`:
+
+- `POST` (`order:write` + CSRF, body 무) — shipment 조회 → carrier 정규화 → `createShippingProvider({ carrier, mode })` (env `SHIPPING_MODE` 또는 `PAYMENT_MODE` fallback) → `track(trackingNumber)` → `recordShipmentTracking` → audit `shipment.tracked`
+- 응답: `ApiEnvelope<{ shipment, tracking, orderTransitionedToDelivered }>`
+- 에러 매핑: SHIPMENT_NOT_FOUND→404, INVALID_STATE→409, ShippingError(NOT_IMPLEMENTED)→501, INVALID_TRACKING_NUMBER→422, TRACKING_NOT_FOUND→404, PROVIDER_HTTP→502
+- `apps/admin/package.json`에 `@commerce/integrations` dep 추가
+
+### 5.x.4 API 계약 확장
+
+`packages/api/src/contracts/index.ts`:
+
+- `ShipmentTrackingStatusValue`, `ShipmentTrackingEventDto`, `ShipmentTrackingDto` 신규
+- `OrderDetailShipmentDto`에 `status?`, `statusDetail?`, `lastTrackedAt?`, `tracking?` 옵션 필드 추가 (하위호환)
+
+### 5.x.5 검증 (2026-05-11)
+
+| 항목 | 결과 |
+|---|---|
+| Lint | ✅ 14/14 |
+| Typecheck | ✅ 14/14 |
+| Test | ✅ **157 passing** (Slice C 138 + integrations shipping-mock 8, shipping-live-stub 2, db shipment-tracking 7, admin admin-shipments 2 = +19) |
+| Build | ✅ 14/14, 신규 라우트 1개 (admin `ƒ /api/v1/shipments/[id]/track`) 등록 |
+
+### 5.x.6 Slice 1 잔여 / 다음 진입
+
+- DB 마이그레이션은 사용자 액션 필요 (`phase3_shipment_tracking`) — Phase 2 .env 작성과 함께 진행
+- live carrier 어댑터는 Slice 2에서 본격 구현 (우체국 IPS Open API, 한진 Open API, CJ 스크래퍼 등)
+- 관리자 UI에서 "추적 갱신" 버튼은 frontend 트랙에서 추가 예정
+
+---
+
+## 6. Phase 3 Slice 2 시작 지점 (다음 세션 즉시 실행)
+
+**작업 요지**: Slice 1에서 만든 5개 carrier mock provider를 실제 carrier API/HTML로 구현 + 자동 폴링 잡. 자격증명 필요 (우체국 IPS API key, 한진 client id 등).
+
+### 6.1 작업 순서 — Slice 2 (실제 carrier 어댑터)
+
+1. 각 carrier별 client (우체국 IPS Open API, 한진 Open API, CJ 스크래퍼, 롯데/로젠 스크래퍼)
+2. `live` 모드에서 mock 위임 대신 실제 HTTP 호출 + DOM 파싱 (CJ/롯데/로젠은 HTML 스크래핑)
+3. Inngest/cron 폴링 잡: 10분마다 `Order.status='SHIPPED' AND Shipment.lastTrackedAt < now-10min` 자동 추적
+4. 관리자 UI 추적 갱신 버튼 (frontend 트랙)
+
+### 6.x Slice 1 원본 명세 (실행 완료, 참고용 보관)
 
 1. **신규 패키지 모듈** `packages/integrations/src/shipping/`
    - `types.ts` — 다음을 export
@@ -508,4 +576,4 @@ apps/
 
 ---
 
-**마지막 갱신**: 2026-05-11 새벽 — Phase 2 종결 (Slice A·B·C 완료, 138 tests / 14 builds, push 까지 완료 `76f7d01`). 다음 세션 진입 명세는 §6 (Phase 3 Slice 1: 택배사 트래킹 어댑터 + Shipment 추적 + 관리자 수동 트리거). 자격증명 / 마이그레이션 불필요 — mock 모드로 즉시 코드 작업 가능.
+**마지막 갱신**: 2026-05-11 새벽 — Phase 3 Slice 1 완료 (택배사 mock 어댑터 + 추적 helper + 관리자 라우트 + 19 new tests, 누적 157 tests / 14 builds). 다음 세션 진입 명세는 §6 (Phase 3 Slice 2: 실제 carrier API/HTML 어댑터 + 자동 폴링 잡 + 관리자 UI). 우체국 IPS API key / 한진 client id 등 자격증명 사용자 액션 필요.
