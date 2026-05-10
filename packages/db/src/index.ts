@@ -25,6 +25,30 @@ export {
   type AuditActorContext,
 } from "./audit-context";
 
+export {
+  CART_TTL_MS,
+  CHECKOUT_RESERVATION_TTL_MS,
+  CartError,
+  addCartItem,
+  createOrderFromReservation,
+  expireOldCarts,
+  getOrCreateCart,
+  mergeCart,
+  recordPaymentIntent,
+  releaseReservationGroup,
+  removeCartItem,
+  reserveCheckoutInventory,
+  updateCartItemQuantity,
+  type CartErrorCode,
+  type CartIdentity,
+  type CartItemView,
+  type CartView,
+  type CheckoutReservation,
+  type CheckoutReservationLine,
+  type CreatedPendingOrder,
+  type PersistedPayment,
+} from "./cart-repository";
+
 import { getAuditActor } from "./audit-context";
 
 export type CatalogProduct = {

@@ -65,3 +65,81 @@ export type CheckoutOrderResult = CheckoutPreview & {
     idempotencyKey: string;
   };
 };
+
+export type CartItemDto = {
+  id: string;
+  variantId: string;
+  sku: string;
+  productSlug: string;
+  productName: string;
+  color: string;
+  size: string;
+  unitPrice: Money;
+  quantity: number;
+  lineTotal: Money;
+  stock: number;
+};
+
+export type CartDto = {
+  id: string;
+  customerId: string | null;
+  items: CartItemDto[];
+  subtotal: Money;
+  expiresAt: string;
+  lastActivityAt: string;
+};
+
+export type CartAddItemRequest = {
+  variantId: string;
+  quantity: number;
+};
+
+export type CartUpdateItemRequest = {
+  quantity: number;
+};
+
+export type CartMergeResult = {
+  cart: CartDto;
+  merged: boolean;
+};
+
+export type CheckoutPreviewLine = {
+  reservationId: string;
+  sku: string;
+  quantity: number;
+  unitPrice: Money;
+  lineTotal: Money;
+};
+
+export type CheckoutPreviewResult = {
+  groupId: string;
+  expiresAt: string;
+  lines: CheckoutPreviewLine[];
+  subtotal: Money;
+  shippingFee: Money;
+  discount: Money;
+  total: Money;
+};
+
+export type CheckoutPreviewBody = {
+  couponCode?: string;
+};
+
+export type CheckoutOrderBody = {
+  groupId: string;
+  shippingAddressId?: string;
+  paymentMethod?: "card" | "transfer" | "virtual_account" | "kakao_pay" | "naver_pay" | "toss_pay";
+  successUrl: string;
+  failUrl: string;
+  idempotencyKey: string;
+};
+
+export type CheckoutOrderCreated = {
+  orderId: string;
+  status: "PENDING_PAYMENT";
+  paymentIntentId: string;
+  clientSecret?: string;
+  redirectUrl?: string;
+  total: Money;
+  expiresAt: string;
+};

@@ -1,6 +1,6 @@
 # 어플웹 — Commerce Platform 진행 상태
 
-> **재개 명령어**: `/clear` 후 `어플웹 Phase 2 Slice B 이어서 작업` 입력 → 이 파일 자동 로드 → 카트 영속화 + 체크아웃 재작성 진입.
+> **재개 명령어**: `/clear` 후 `어플웹 Phase 2 Slice C 이어서 작업` 입력 → 이 파일 자동 로드 → 부분 출고/환불 + 주문 history 진입.
 > **GitHub 원격**: https://github.com/joochanyang/OnlineStore.git (main 브랜치)
 
 ---
@@ -157,6 +157,55 @@
 1. `.env` 작성 (Supabase DATABASE_URL + DIRECT_URL, AUTH_JWT_SECRET/CSRF_SECRET 64hex, TOSS_CLIENT_KEY/SECRET_KEY/WEBHOOK_SECRET, PAYMENT_MODE=sandbox)
 2. `npm run prisma:migrate` (마이그레이션 이름: `phase2_slice_a_cart_refund_webhook`)
 3. Toss 가맹점 콘솔에서 `/api/v1/webhooks/payments/toss` URL 등록 + 시크릿 발급
+
+---
+
+## 1.10 Phase 2 Slice B 완료 (2026-05-11)
+
+### 1.10.1 신규 DB 헬퍼 (`packages/db/src/cart-repository.ts`)
+
+- `getOrCreateCart(identity)` — 회원/게스트 식별자로 카트 조회 또는 생성. 반환: `CartView` (items + subtotal + 만료일)
+- `addCartItem` — 동일 variantId 재추가 시 quantity 합산. 재고/활성 상태/최대 99개 제한 검증. CartError throw
+- `updateCartItemQuantity` — quantity ≤ 0이면 자동 삭제로 위임
+- `removeCartItem`
+- `mergeCart({ anonymousToken, customerId })` — 게스트→회원 카트 병합. 동일 variant는 합산(stock/MAX_QTY 캡), 게스트 카트 삭제
+- `expireOldCarts(now)` — `expiresAt < now` cascade 삭제
+- `reserveCheckoutInventory({ cartId, items, ttlMs?, groupId? })` — 트랜잭션으로 variant당 활성 reservation 합산 후 stock 비교, 부족하면 INSUFFICIENT_STOCK throw, 통과 시 `InventoryReservation` 생성 (reason=`checkout:${groupId}`, expiresAt=10분 후)
+- `releaseReservationGroup(groupId)` — group의 모든 reservation 삭제
+- `createOrderFromReservation` — reservation 기반 Order/OrderLine 생성 (status=PENDING_PAYMENT). 재고 차감은 webhook에서
+- `recordPaymentIntent` — `idempotencyKey` 기반 dedup. 같은 키 재호출 시 기존 Payment 반환, orderId 불일치 시 throw
+
+### 1.10.2 카트 라우트 5종 (`apps/web/app/api/v1/me/cart/`)
+
+- `GET /me/cart` — 게스트면 `cart_token` 쿠키 자동 발급 (HttpOnly, SameSite=Lax, 30일)
+- `POST /me/cart/items` — variantId + quantity, CSRF 필수
+- `PATCH /me/cart/items/[id]` — quantity 변경 (≤0이면 삭제)
+- `DELETE /me/cart/items/[id]`
+- `POST /me/cart/merge` — 인증 필수 (회원만), 게스트 토큰 기반 병합 후 cart_token 쿠키 만료
+
+`apps/web/app/lib/cart-context.ts` — `resolveCartIdentity(request, { requireCsrf? })` 헬퍼: 회원이면 customer 컨텍스트, 아니면 cart_token 발급/재사용. CSRF는 회원 세션 기반 또는 `cart:<token>` sessionId 기반 검증
+
+`apps/web/app/lib/cart-response.ts` — 응답 envelope (CartDto 프로젝션 + Set-Cookie 첨부 + CartError → HTTP status 매핑: 404/410/409/422/503)
+
+### 1.10.3 체크아웃 재작성
+
+- `POST /api/v1/checkout/preview` (재작성) — 카트 식별자만 받음. 재고 예약 후 `{ groupId, expiresAt, lines, subtotal, shippingFee, discount, total }` 반환. **PG 외부 호출 0건** (어댑터 unmount)
+- `POST /api/v1/checkout/orders` (재작성) — `{ groupId, idempotencyKey, successUrl, failUrl, paymentMethod? }` 받음. 흐름: reservation → Order/OrderLine → Toss createIntent → Payment 저장(idempotencyKey unique). 같은 idempotencyKey로 재호출 시 기존 Payment 반환. 결제 provider 실패 시 reservation 즉시 release.
+
+### 1.10.4 검증 (2026-05-11 새벽)
+
+| 항목 | 결과 |
+|---|---|
+| Lint | ✅ 14/14 |
+| Typecheck | ✅ 14/14 |
+| Test | ✅ **119 passing** (Slice A 93 + Slice B: cart-repository 9, cart-routes 5, checkout-preview 2 = +16) |
+| Build | ✅ 14/14, 신규 라우트 4개 + checkout 2개 + webhook 1개 web 빌드에 등록 |
+
+### 1.10.5 Slice B 잔여 (Slice C 진입 전)
+
+1. 사용자 액션: `.env` 작성 + `npm run prisma:migrate` (Slice A에서 동일)
+2. 통합 테스트 (실제 Postgres + Toss sandbox): 동시 100건 주문 → 재고 음수 0 / Toss 실제 결제 완료 → webhook → reservation→stock 차감 / idempotencyKey 동일 호출 5회 → Payment 1건만 / Toss 실패 → reservation 즉시 해제
+3. 가격 race condition 방어: `InventoryReservation`에 `unitPrice` 컬럼 추가 또는 lock-and-snapshot 패턴 (Phase 2.5 고려)
 
 ---
 
@@ -327,29 +376,23 @@ apps/
 
 ---
 
-## 6. Phase 2 Slice B 시작 지점 (다음 세션)
+## 6. Phase 2 Slice C 시작 지점 (다음 세션)
 
-**Slice A는 2026-05-11 완료**. Slice B에서 즉시 다음 단계 실행:
+**Slice A·B는 2026-05-11 완료**. Slice C에서 즉시 다음 단계:
 
-1. **사용자 액션 선행 확인**: `.env` 작성 + `npm run prisma:migrate` 완료 여부
-2. `apps/web/app/api/v1/me/cart/` 라우트 5종 신규
-   - `GET /me/cart` — 현재 카트 (게스트는 `cart_token` 쿠키)
-   - `POST /me/cart/items` — 추가 (서버 가격 검증 + 재고 확인)
-   - `PATCH /me/cart/items/:id` — 수량 변경
-   - `DELETE /me/cart/items/:id` — 삭제
-   - `POST /me/cart/merge` — 로그인 시 게스트→회원 카트 병합 (충돌: 합산)
-3. `packages/db/src/index.ts`에 카트 헬퍼 추가: `getOrCreateCart`, `addCartItem`, `updateCartItemQuantity`, `removeCartItem`, `mergeCart`, `expireOldCarts`
-4. `apps/web/app/api/v1/checkout/preview/route.ts` 재작성 — 카트 기반, `InventoryReservation` TTL 10분 (atomic check + insert in transaction)
-5. `apps/web/app/api/v1/checkout/orders/route.ts` 재작성 — `createPaymentProvider().createIntent` 호출, `Payment.idempotencyKey` 저장
-6. 단위 테스트: 카트 라우트 + 동시 100건 주문 → 재고 음수 0 검증 (vitest + mock prisma)
+1. **사용자 액션 선행 확인**: `.env` + `npm run prisma:migrate` (Toss webhook 서명 검증을 실제로 동작시키려면 필수)
+2. **고객 주문 history 라우트** (`apps/web/app/api/v1/me/orders/`)
+   - `GET /me/orders` — 페이지네이션 + 상태 필터
+   - `GET /me/orders/[id]` — 상세 (lines + payments + shipments + refunds)
+   - `POST /me/orders/[id]/cancel` — 미발송 한정. PaymentProvider.cancel + reservation 해제 (이미 차감된 stock은 `tx.productVariant.update increment`로 복원)
+3. **관리자 fulfillment/refund 라우트** (`apps/admin/app/api/v1/orders/[id]/`)
+   - `POST /api/v1/orders/[id]/fulfillments` — 라인별 quantity 부분 출고 등록 → `OrderLineFulfillment` + Shipment 생성/연결
+   - `POST /api/v1/orders/[id]/refunds` — 라인별 quantity 부분 환불 → Toss `cancel(cancelAmount)` → `PaymentRefund` + `OrderLineRefund` 생성. 누적 환불액 ≤ Payment.amount 보장
+4. **Webhook 후처리 강화** — Toss webhook이 결제 완료 이벤트 받으면 reservation → stock 차감 + Order.status PAID + paidAt 기록 (현재는 단순 markWebhookProcessed만 처리)
+5. **감사 로그**: 주문 상태 변경 (cancel/fulfill/refund) 모두 `withAuditContext` + `insertAuditLog` 자동 기록
+6. **테스트**: 환불 합계 = Payment.amount, 같은 fulfillment 두 번 → 멱등성 (단순 dedup 또는 conflict)
 
-**예상 공수**: Slice B ≒ 5–7일.
-
-### 6.1 Slice C 미리보기
-
-- `GET /api/v1/me/orders` + `GET /api/v1/me/orders/:id` + `POST /me/orders/:id/cancel`
-- `POST /admin/orders/:id/fulfillments` + `POST /admin/orders/:id/refunds`
-- 부분 환불 시 `PaymentRefund.amount` 합산 = `Payment.amount` 검증
+**예상 공수**: Slice C ≒ 5–7일.
 
 ---
 
@@ -368,4 +411,4 @@ apps/
 
 ---
 
-**마지막 갱신**: 2026-05-11 — Phase 2 Slice A 완료 (스키마 6 모델 + payments 패키지 + Toss 어댑터 mock/sandbox/live + webhook 라우트 + 18 신규 테스트 / 14 builds 모두 통과). Slice B 진입은 사용자 `.env` 작성 후.
+**마지막 갱신**: 2026-05-11 새벽 — Phase 2 Slice B 완료 (카트 헬퍼 8개 + 카트 라우트 5종 + 체크아웃 2종 재작성 + 16 신규 테스트, 누적 119 tests / 14 builds 모두 통과). Slice C 진입은 사용자 `.env` 작성 후 또는 mock 모드로 즉시 가능.
