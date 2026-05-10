@@ -926,6 +926,77 @@ export async function insertAuditLog(input: InsertAuditLogInput): Promise<void> 
   });
 }
 
+// ----- Webhook Events -----
+
+export type WebhookEventRecord = {
+  id: string;
+  provider: string;
+  externalId: string;
+  receivedAt: Date;
+  signatureVerifiedAt: Date | null;
+  processedAt: Date | null;
+  payload: unknown;
+};
+
+export type RecordWebhookResult =
+  | { inserted: true; event: WebhookEventRecord }
+  | { inserted: false; event: WebhookEventRecord }
+  | { inserted: false; event: null; reason: "no_database" };
+
+export async function recordWebhookEvent(input: {
+  provider: string;
+  externalId: string;
+  payload: unknown;
+  signatureVerifiedAt?: Date;
+}): Promise<RecordWebhookResult> {
+  const prisma = getPrismaClient();
+  if (!prisma) {
+    return { inserted: false, event: null, reason: "no_database" };
+  }
+  try {
+    const created = await prisma.webhookEvent.create({
+      data: {
+        provider: input.provider,
+        externalId: input.externalId,
+        payload: input.payload as object,
+        signatureVerifiedAt: input.signatureVerifiedAt ?? new Date(),
+      },
+    });
+    return { inserted: true, event: created as unknown as WebhookEventRecord };
+  } catch (err) {
+    if (
+      err instanceof Error &&
+      "code" in err &&
+      (err as { code?: string }).code === "P2002"
+    ) {
+      const existing = await prisma.webhookEvent.findUnique({
+        where: {
+          provider_externalId: {
+            provider: input.provider,
+            externalId: input.externalId,
+          },
+        },
+      });
+      if (existing) {
+        return { inserted: false, event: existing as unknown as WebhookEventRecord };
+      }
+    }
+    throw err;
+  }
+}
+
+export async function markWebhookProcessed(id: string, error?: string): Promise<void> {
+  const prisma = getPrismaClient();
+  if (!prisma) return;
+  await prisma.webhookEvent.update({
+    where: { id },
+    data: {
+      processedAt: new Date(),
+      error: error ?? null,
+    },
+  });
+}
+
 // ----- Mappers -----
 
 function mapAdmin(record: {

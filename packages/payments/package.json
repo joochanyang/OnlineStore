@@ -1,0 +1,22 @@
+{
+  "name": "@commerce/payments",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./types": "./src/types.ts",
+    "./toss": "./src/toss/provider.ts",
+    "./toss/signature": "./src/toss/signature.ts",
+    "./factory": "./src/factory.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.16"
+  }
+}

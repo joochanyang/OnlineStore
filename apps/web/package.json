@@ -14,6 +14,7 @@
     "@commerce/config": "*",
     "@commerce/core": "*",
     "@commerce/db": "*",
+    "@commerce/payments": "*",
     "@commerce/security": "*",
     "@commerce/seo": "*",
     "next": "^16.0.10",

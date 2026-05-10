@@ -1,6 +1,7 @@
 # 어플웹 — Commerce Platform 진행 상태
 
-> **재개 명령어**: `/clear` 후 `어플웹 Phase 2 이어서 작업` 입력 → 이 파일 자동 로드 → 즉시 Phase 2 진입.
+> **재개 명령어**: `/clear` 후 `어플웹 Phase 2 Slice B 이어서 작업` 입력 → 이 파일 자동 로드 → 카트 영속화 + 체크아웃 재작성 진입.
+> **GitHub 원격**: https://github.com/joochanyang/OnlineStore.git (main 브랜치)
 
 ---
 
@@ -95,6 +96,67 @@
 2. 이메일 인증 + 비밀번호 재설정 (Resend 연동)
 3. OAuth 콜백 (카카오/네이버/구글/Apple) — Auth.js v5
 4. 관리자 MFA setup/verify 엔드포인트 (TOTP enroll, recovery codes)
+
+---
+
+## 1.9 Phase 2 Slice A 완료 (2026-05-11)
+
+### 1.9.1 신규 Prisma 모델 (총 6개 + 2 enum)
+
+`packages/db/prisma/schema.prisma`:
+
+- `Cart(id, customerId? @unique, anonymousToken? @unique, expiresAt, lastActivityAt)` — Customer는 1:1, 게스트는 anonymousToken
+- `CartItem(cartId, variantId, quantity, addedAt)` — `@@unique([cartId, variantId])`, ProductVariant `onDelete: Restrict`
+- `OrderLineFulfillment(orderLineId, shipmentId?, quantity, status, …)` — 부분 출고
+- `OrderLineRefund(orderLineId, paymentRefundId, quantity, status, …)` — 부분 환불 라인 매핑
+- `PaymentRefund(paymentId, externalRefundId @unique, amount, reason, status, requestedAt, completedAt?)` — 환불 ledger
+- `WebhookEvent(provider, externalId, payload Json, signatureVerifiedAt?, processedAt?, error?, receivedAt)` — `@@unique([provider, externalId])` (idempotency)
+- 신규 enum: `FulfillmentStatus { PENDING, SHIPPED, DELIVERED, CANCELLED }`, `RefundStatus { PENDING, COMPLETED, FAILED, CANCELLED }`
+- `Payment.idempotencyKey String? @unique` 추가
+- `Customer.cart`, `ProductVariant.cartItems`, `OrderLine.fulfillments/refunds`, `Shipment.fulfillments`, `Payment.refunds` 백릴레이션 추가
+
+`prisma generate` 통과. **마이그레이션은 사용자 액션 필요** (DATABASE_URL 설정 후 `npm run prisma:migrate`).
+
+### 1.9.2 신규 패키지 `@commerce/payments`
+
+- `src/types.ts` — `PaymentProvider` 인터페이스 (createIntent / confirm / cancel / refund / verifyWebhookSignature) + 결제수단/상태 타입 + `PaymentError`
+- `src/toss/signature.ts` — HMAC-SHA256 (timestamp + body) + 5분 윈도우 + nonce 재사용 차단 (`__resetSeenNoncesForTests` export)
+- `src/toss/provider.ts` — `TossPaymentsProvider` 클래스. 모드별 분기: `mock`(인메모리 ledger, 외부 호출 0) / `sandbox` / `live`(Toss v2 REST: `/v1/payments`, `/v1/payments/confirm`, `/v1/payments/{key}/cancel`). idempotencyKey는 mock에서 인덱스로, live에서 `Idempotency-Key` 헤더로
+- `src/factory.ts` — `createPaymentProvider(env)` → 환경변수 기반 인스턴스화
+- exports: `.`, `./types`, `./toss`, `./toss/signature`, `./factory`
+
+### 1.9.3 Webhook 라우트
+
+`apps/web/app/api/v1/webhooks/payments/toss/route.ts`:
+
+- POST 전용, `runtime = nodejs`, `dynamic = force-dynamic`
+- 헤더: `x-tosspayments-signature`, `x-tosspayments-timestamp`, `x-tosspayments-nonce`
+- raw body 보존 → `verifyWebhookSignature` → 거부 시 400/401/409 (이유별)
+- 통과 시 `recordWebhookEvent` (P2002 catch → 중복 → 200 + `status: "duplicate"`) → 신규 row면 `markWebhookProcessed` 후 200 + `status: "accepted"`
+- CSRF 면제 (서명이 인증 역할)
+- DB 미연결 (no_database) 시에도 200 응답하지 않고 throw → 500 (운영에서 빠르게 감지)
+
+### 1.9.4 DB 헬퍼
+
+`packages/db/src/index.ts`:
+
+- `recordWebhookEvent({ provider, externalId, payload, signatureVerifiedAt? })` → `{ inserted, event }` (P2002 → 기존 row 조회 후 inserted:false)
+- `markWebhookProcessed(id, error?)`
+
+### 1.9.5 검증 (2026-05-11)
+
+| 항목 | 결과 |
+|---|---|
+| Lint | ✅ 14/14 |
+| Typecheck | ✅ 14/14 |
+| Test | ✅ **93 passing** (기존 75 + payments mock 6 + payments signature 7 + web webhook 5) |
+| Build | ✅ 14/14 (web에 `ƒ /api/v1/webhooks/payments/toss` 등록) |
+
+### 1.9.6 Slice A 잔여 (Slice B 진입 전 사용자 액션)
+
+1. `.env` 작성 (Supabase DATABASE_URL + DIRECT_URL, AUTH_JWT_SECRET/CSRF_SECRET 64hex, TOSS_CLIENT_KEY/SECRET_KEY/WEBHOOK_SECRET, PAYMENT_MODE=sandbox)
+2. `npm run prisma:migrate` (마이그레이션 이름: `phase2_slice_a_cart_refund_webhook`)
+3. Toss 가맹점 콘솔에서 `/api/v1/webhooks/payments/toss` URL 등록 + 시크릿 발급
 
 ---
 
@@ -265,17 +327,29 @@ apps/
 
 ---
 
-## 6. Phase 2 첫 작업 명세 (Slice A 시작 지점)
+## 6. Phase 2 Slice B 시작 지점 (다음 세션)
 
-다음 세션에서 **즉시 다음 단계 실행**:
+**Slice A는 2026-05-11 완료**. Slice B에서 즉시 다음 단계 실행:
 
-1. `packages/db/prisma/schema.prisma`에 Cart/CartItem/OrderLineFulfillment/OrderLineRefund/PaymentRefund/WebhookEvent 추가, Payment.idempotencyKey unique
-2. `npm run prisma:generate` + 첫 마이그레이션 생성
-3. `packages/payments/` 신규 패키지 (PaymentProvider 인터페이스 + Toss 어댑터 mock/sandbox/live)
-4. `apps/web/app/api/v1/webhooks/payments/toss/route.ts` 신규 — 서명 검증 + WebhookEvent unique insert
-5. 단위 테스트: TossPaymentsProvider mock 모드 round-trip, webhook 재전송 idempotency
+1. **사용자 액션 선행 확인**: `.env` 작성 + `npm run prisma:migrate` 완료 여부
+2. `apps/web/app/api/v1/me/cart/` 라우트 5종 신규
+   - `GET /me/cart` — 현재 카트 (게스트는 `cart_token` 쿠키)
+   - `POST /me/cart/items` — 추가 (서버 가격 검증 + 재고 확인)
+   - `PATCH /me/cart/items/:id` — 수량 변경
+   - `DELETE /me/cart/items/:id` — 삭제
+   - `POST /me/cart/merge` — 로그인 시 게스트→회원 카트 병합 (충돌: 합산)
+3. `packages/db/src/index.ts`에 카트 헬퍼 추가: `getOrCreateCart`, `addCartItem`, `updateCartItemQuantity`, `removeCartItem`, `mergeCart`, `expireOldCarts`
+4. `apps/web/app/api/v1/checkout/preview/route.ts` 재작성 — 카트 기반, `InventoryReservation` TTL 10분 (atomic check + insert in transaction)
+5. `apps/web/app/api/v1/checkout/orders/route.ts` 재작성 — `createPaymentProvider().createIntent` 호출, `Payment.idempotencyKey` 저장
+6. 단위 테스트: 카트 라우트 + 동시 100건 주문 → 재고 음수 0 검증 (vitest + mock prisma)
 
-**예상 공수**: Slice A ≒ 5–7일, Phase 2 전체 ≒ 3주.
+**예상 공수**: Slice B ≒ 5–7일.
+
+### 6.1 Slice C 미리보기
+
+- `GET /api/v1/me/orders` + `GET /api/v1/me/orders/:id` + `POST /me/orders/:id/cancel`
+- `POST /admin/orders/:id/fulfillments` + `POST /admin/orders/:id/refunds`
+- 부분 환불 시 `PaymentRefund.amount` 합산 = `Payment.amount` 검증
 
 ---
 
@@ -294,4 +368,4 @@ apps/
 
 ---
 
-**마지막 갱신**: 2026-05-11 — Phase 1 라우트 슬라이스 완료, Phase 2 진입 준비 완료.
+**마지막 갱신**: 2026-05-11 — Phase 2 Slice A 완료 (스키마 6 모델 + payments 패키지 + Toss 어댑터 mock/sandbox/live + webhook 라우트 + 18 신규 테스트 / 14 builds 모두 통과). Slice B 진입은 사용자 `.env` 작성 후.
