@@ -1,0 +1,20 @@
+{
+  "name": "@commerce/integrations",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./suppliers": "./src/suppliers/index.ts",
+    "./importers": "./src/importers/index.ts",
+    "./ai-normalizer": "./src/ai-normalizer/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.16"
+  }
+}

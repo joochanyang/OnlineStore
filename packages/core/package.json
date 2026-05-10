@@ -1,0 +1,23 @@
+{
+  "name": "@commerce/core",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./auth": "./src/auth/index.ts",
+    "./product": "./src/product/index.ts",
+    "./inventory": "./src/inventory/index.ts",
+    "./order": "./src/order/index.ts",
+    "./payment": "./src/payment/index.ts",
+    "./supplier": "./src/supplier/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.16"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "@commerce/security",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./csrf": "./src/csrf.ts",
+    "./headers": "./src/headers.ts",
+    "./rate-limit": "./src/rate-limit/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.16"
+  }
+}

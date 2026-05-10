@@ -1,0 +1,27 @@
+{
+  "name": "@commerce/web",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1 --port 3000",
+    "build": "next build",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@commerce/api": "*",
+    "@commerce/auth": "*",
+    "@commerce/config": "*",
+    "@commerce/core": "*",
+    "@commerce/db": "*",
+    "@commerce/security": "*",
+    "@commerce/seo": "*",
+    "next": "^16.0.10",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.16"
+  }
+}

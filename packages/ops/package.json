@@ -1,0 +1,23 @@
+{
+  "name": "@commerce/ops",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./coupons": "./src/coupons/index.ts",
+    "./points": "./src/points/index.ts",
+    "./reviews": "./src/reviews/index.ts",
+    "./cs": "./src/cs/index.ts",
+    "./audit": "./src/audit/index.ts",
+    "./reports": "./src/reports/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.16"
+  }
+}

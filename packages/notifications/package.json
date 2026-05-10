@@ -1,0 +1,21 @@
+{
+  "name": "@commerce/notifications",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./channels": "./src/channels/index.ts",
+    "./templates": "./src/templates/index.ts",
+    "./providers": "./src/providers/index.ts",
+    "./jobs": "./src/jobs/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.16"
+  }
+}

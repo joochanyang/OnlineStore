@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["dom", "dom.iterable", "es2022"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "baseUrl": ".",
+    "paths": {
+      "@commerce/api/*": ["packages/api/src/*"],
+      "@commerce/auth": ["packages/auth/src/index.ts"],
+      "@commerce/auth/*": ["packages/auth/src/*"],
+      "@commerce/config": ["packages/config/src/index.ts"],
+      "@commerce/config/*": ["packages/config/src/*"],
+      "@commerce/core/*": ["packages/core/src/*"],
+      "@commerce/db/*": ["packages/db/src/*"],
+      "@commerce/integrations/*": ["packages/integrations/src/*"],
+      "@commerce/notifications/*": ["packages/notifications/src/*"],
+      "@commerce/ops/*": ["packages/ops/src/*"],
+      "@commerce/security": ["packages/security/src/index.ts"],
+      "@commerce/security/*": ["packages/security/src/*"],
+      "@commerce/seo/*": ["packages/seo/src/*"]
+    }
+  }
+}

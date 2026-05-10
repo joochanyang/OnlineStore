@@ -1,0 +1,11 @@
+{
+  "expo": {
+    "name": "Commerce Platform",
+    "slug": "commerce-platform",
+    "scheme": "commerce",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true
+  }
+}
